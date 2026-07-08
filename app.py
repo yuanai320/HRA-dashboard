@@ -48,8 +48,11 @@ BAND_COLOR = {'健康': '#2E7D32', '良好': '#7CB342', '亚健康': '#FB8C00', 
 
 
 @st.cache_data
-def load():
-    df = pd.read_excel('data.xlsx')
+def load_default():
+    return pd.read_excel('data.xlsx')
+
+
+def compute(df):
     # 年龄 / BMI（不加载姓名、会员号等隐私列）
     bd = pd.to_datetime(df['出生日期'].astype(str).str.strip(), errors='coerce')
     cd = pd.to_datetime(df['检查日期'].astype(str).str.strip(), errors='coerce')
@@ -69,7 +72,23 @@ def load():
     return df, absdf, regions
 
 
-df, absdf, regions = load()
+# ---------- 数据源：默认内置 396 份，支持上传自定义数据 ----------
+with st.sidebar:
+    st.header('📥 上传你的 HRA 数据')
+    st.caption('支持 Excel(.xlsx/.xls)，需与示例同格式（含 85 个身体区域列 + 人口学列）。')
+    uploaded = st.file_uploader('选择文件', type=['xlsx', 'xls'])
+    if uploaded is not None:
+        raw = pd.read_excel(uploaded)
+        st.success(f'✅ 已加载上传数据：{raw.shape[0]} 行')
+    else:
+        raw = load_default()
+        st.info('当前展示：内置 396 份示例数据。上传文件即可分析你自己的群体。')
+    st.caption('⚠️ 公开 demo，请勿上传含敏感个人身份信息的数据。')
+
+df, absdf, regions = compute(raw)
+if not regions:
+    st.error('⚠️ 上传的文件未找到 HRA 身体区域列，请确认格式与示例一致（含「左肺上叶区域」「胃区域」等 85 个区域列）。可在仓库内下载 data.xlsx 对照格式。')
+    st.stop()
 
 # ---------- 派生指标 ----------
 N = len(df)
@@ -82,7 +101,7 @@ RISK_SHARE = df['band'].isin(['亚健康', '警戒']).mean() * 100
 # ============================ 页面 ============================
 st.set_page_config(page_title='HRA 群体健康洞察仪表盘', page_icon='📊', layout='wide')
 st.title('📊 HRA 群体健康洞察仪表盘')
-st.caption('基于 396 份真实 HRA 检测数据 · 数字健康管理 / 健康大数据方向作品 · 作者：袁爱')
+st.caption('HRA 群体健康洞察 · 数字健康管理 / 健康大数据方向作品 · 作者：袁爱')
 
 # 侧边栏说明
 with st.sidebar:
@@ -95,6 +114,10 @@ with st.sidebar:
         '**适用场景**：养老机构人群管理、体检中心企业报告、健康企业员工关怀。')
     st.divider()
     st.caption('东北大学秦皇岛分校 · 健康服务与管理（120410T）')
+
+# ---------- 数据来源 banner ----------
+src_label = '你上传的数据' if uploaded is not None else '内置 396 份示例数据'
+st.caption(f'📌 当前分析样本：**{N} 人** · 数据来源：{src_label}')
 
 # ---------- 顶部 KPI ----------
 c1, c2, c3, c4 = st.columns(4)

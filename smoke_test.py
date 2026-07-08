@@ -5,6 +5,7 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 st = MagicMock()
 st.cache_data = lambda f: f  # 装饰器变 identity
 st.columns = lambda n: tuple(MagicMock() for _ in range(n if isinstance(n, int) else len(n)))
+st.file_uploader = lambda *a, **k: None  # 冒烟测试走默认数据分支
 sys.modules['streamlit'] = st
 import importlib.util
 spec = importlib.util.spec_from_file_location('hra_app', 'app.py')
