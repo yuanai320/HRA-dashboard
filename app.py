@@ -8,18 +8,20 @@ HRA 群体健康洞察仪表盘  v1.2（响应式精简版）
 -----------------------------------------------------------------
 指标说明
 - 身体区域功能偏离值：HRA 对 85 个身体区域逐项检测，输出功能偏离度（正=功能偏亢，负=功能偏低），
-  绝对值越大代表该区域越偏离正常。本仪表盘取 |偏离| 衡量异常程度。
+  绝对值越大代表该区域越偏离正常。本仪表盘取 |偏离| 衡量偏离程度。
 - 异常参考线：|偏离| >= 30 记为「需关注」（HRA 通用判读惯例，机构可自定义阈值）。
 - 综合健康指数（派生指标）：100 − 平均区域绝对偏离 ×(100/60)，用于群体横向对比，非临床诊断。
 """
 
+import os
 import pandas as pd
 import numpy as np
+import json
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
-THRESH = 30  # 异常参考线
+THRESH = 30  # 关注阈值
 
 # 85 个身体区域 → 8 大系统归类
 SYS_MAP = {
@@ -46,9 +48,45 @@ FONT = dict(family='Microsoft YaHei, SimHei, PingFang SC, Noto Sans CJK SC, sans
 BAND_ORDER = ['健康', '良好', '亚健康', '警戒']
 BAND_COLOR = {'健康': '#2E7D32', '良好': '#7CB342', '亚健康': '#FB8C00', '警戒': '#E53935'}
 
+# set_page_config 必须是第一个 Streamlit 命令（放在任何 st.markdown 之前）
+st.set_page_config(page_title='HRA 群体健康洞察', page_icon='📊', layout='wide')
+
+# ─────────────────────────────────────────────
+# 访问统计（匿名：只记数字，不收集任何检测数据 / 个人信息）
+# ─────────────────────────────────────────────
+def _counter(key, hit=False):
+    import urllib.request
+    op = "hit" if hit else "get"
+    try:
+        with urllib.request.urlopen(
+            "https://abacus.jasoncameron.dev/%s/yuanai-dashboard/%s" % (op, key),
+            timeout=3) as _r:
+            return json.loads(_r.read().decode("utf-8")).get("value")
+    except Exception:
+        return None
+
+if "_seen_once" not in st.session_state:
+    st.session_state["_seen_once"] = True
+    st.session_state["_users"] = _counter("users", hit=True)
+    st.session_state["_visits"] = _counter("visits", hit=True)
+    st.session_state["_uploads"] = _counter("uploads", hit=False)
+USERS = st.session_state.get("_users")
+VISITS = st.session_state.get("_visits")
+
+def _count_upload():
+    """用户上传自己的数据并完成分析时调用（同一会话只记一次）。"""
+    if st.session_state.get("_up_once"):
+        return
+    st.session_state["_up_once"] = True
+    st.session_state["_uploads"] = _counter("uploads", hit=True)
+
 
 @st.cache_data
 def load_default():
+    if not os.path.exists('data.xlsx'):
+        st.error('⚠️ 仓库里没找到 data.xlsx。请确认 data.xlsx 已和 app.py 一起上传到 '
+                 'GitHub 仓库根目录（部署用的仓库里必须有这个文件，否则云端读不到数据会崩溃）。')
+        st.stop()
     return pd.read_excel('data.xlsx')
 
 
@@ -95,21 +133,33 @@ hr{border-color:#eceff3;}
 </style>
 """, unsafe_allow_html=True)
 
-st.set_page_config(page_title='HRA 群体健康洞察', page_icon='📊', layout='wide')
 st.title('HRA 群体健康洞察')
 st.caption('把一堆检测数据，变成「谁最弱、先干预哪」的答案 · 数字健康管理作品 · 袁爱')
+st.info(
+    '**关于本工具**：这是一个**群体健康风险分析**工具，不是诊断工具。'
+    '页面上所有比率与指数，反映的是检测值相对参考范围的**偏离程度与分布趋势**，'
+    '用于回答「哪个系统偏离最集中、资源该先投哪里」。它**不用于个体疾病判断**，也不能替代医学检查与诊断。'
+)
+if USERS:
+    _up = st.session_state.get('_uploads')
+    _tail = f' · 已分析 <b>{_up}</b> 份上传数据' if _up else ''
+    st.markdown(
+        f"<div style='text-align:right;color:#8a8a8a;font-size:0.86rem;margin:-0.5rem 0 0.6rem;'>"
+        f"👥 已有 <b>{USERS}</b> 位使用者来过{_tail}</div>",
+        unsafe_allow_html=True)
 
 # 侧边栏：简洁说明
 with st.sidebar:
     st.header('关于')
     st.markdown('基于真实 HRA 检测数据，把群体健康变成可决策的信息。')
-    st.caption('异常参考线：区域偏离 ≥ 30 记为需关注。综合健康指数为派生相对指标，非临床诊断。')
+    st.caption('关注阈值：区域偏离 ≥ 30 记为「需关注」。综合健康指数为派生相对指标，非临床诊断，不表示已患疾病。')
 
 # ---------- 上传入口（主屏可见，兼顾手机端） ----------
 st.markdown('### 上传你自己的数据（可选）')
 st.caption('支持 Excel，需与示例同格式（含 85 个身体区域列）。不上传则查看内置 396 份示例。')
 uploaded = st.file_uploader('选择文件', type=['xlsx', 'xls'], label_visibility='collapsed')
 if uploaded is not None:
+    _count_upload()
     raw = pd.read_excel(uploaded)
     st.success(f'已加载你上传的数据：{raw.shape[0]} 人')
 else:
@@ -152,7 +202,7 @@ with col_a:
         marker=dict(colors=[BAND_COLOR[b] for b in cnt.index]),
         textinfo='percent+label', hole=0.45)])
     fig.update_layout(font=FONT, height=360, margin=dict(t=20, b=20))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 with col_b:
     st.info(f'平均指数 **{HI_MEAN:.0f}**，约 **{RISK_SHARE:.0f}%** 的人处于亚健康或以下——'
             f'这群人整体有明显的干预空间。')
@@ -164,21 +214,21 @@ with col_b:
 
 st.divider()
 
-# ---------- 2. 各系统异常率排行 ----------
-st.header('2. 各系统异常率排行')
+# ---------- 2. 各系统偏离率排行 ----------
+st.header('2. 各系统偏离率排行')
 sr = pd.Series(sys_rate).sort_values()
 fig = go.Figure(go.Bar(
     x=sr.values, y=sr.index, orientation='h',
     marker=dict(color=sr.values, colorscale='YlOrRd'),
     text=[f'{v:.1f}%' for v in sr.values], textposition='outside'))
 fig.update_layout(font=FONT, height=380, margin=dict(t=20, b=20),
-                  xaxis_title='异常率（|区域偏离|≥30 的区域占比）')
-st.plotly_chart(fig, use_container_width=True)
-st.info(f'**消化、呼吸、骨骼**是异常最集中的三个系统，干预资源建议优先投在这里。')
+                  xaxis_title='偏离率（|区域偏离|≥30 的区域占比）')
+st.plotly_chart(fig, width='stretch')
+st.info(f'**消化、呼吸、骨骼**是偏离最集中的三个系统，干预资源建议优先投在这里。')
 with st.expander('专业视角'):
     st.markdown(f'**{TOP_SYS}（{sys_rate[TOP_SYS]:.1f}%）、呼吸系统（{sys_rate["呼吸系统"]:.1f}%）、'
-                f'骨骼系统（{sys_rate["骨骼系统"]:.1f}%）**为三大高发异常系统，分别与「饮食结构 / 久坐 / 姿势不良」'
-                f'高度相关；免疫系统异常率最低（8.2%），说明群体免疫储备相对尚可。')
+                f'骨骼系统（{sys_rate["骨骼系统"]:.1f}%）**为三大高发偏离系统，分别与「饮食结构 / 久坐 / 姿势不良」'
+                f'高度相关；免疫系统偏离率最低（8.2%），说明群体免疫储备相对尚可。')
 
 st.divider()
 
@@ -191,7 +241,7 @@ fig.add_trace(go.Scatter(x=ag.index, y=ag.values, mode='lines+markers+text',
                          line=dict(color='#1565C0', width=3), marker=dict(size=10)))
 fig.update_layout(font=FONT, height=340, margin=dict(t=20, b=20),
                   yaxis_title='平均健康指数', xaxis_title='年龄组')
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width='stretch')
 st.info('**45–54 岁**指数明显下滑，是重点筛查与早期干预的人群。')
 with st.expander('专业视角'):
     st.markdown(f'25–34 岁群体指数最高（{ag.get("25-34",0):.1f}），但 **45–54 岁骤降至 {ag.get("45-54",0):.1f}**，'
@@ -208,12 +258,12 @@ for sex in ['男', '女']:
     for s, cols in SYS_MAP.items():
         cols2 = [c for c in cols if c in sub.columns]
         if cols2:
-            rows.append({'性别': sex, '系统': s, '异常率': sub[cols2].ge(THRESH).mean().mean() * 100})
+            rows.append({'性别': sex, '系统': s, '偏离率': sub[cols2].ge(THRESH).mean().mean() * 100})
 gs = pd.DataFrame(rows)
-fig = px.bar(gs, x='系统', y='异常率', color='性别', barmode='group',
+fig = px.bar(gs, x='系统', y='偏离率', color='性别', barmode='group',
              color_discrete_map={'男': '#1565C0', '女': '#E91E63'})
 fig.update_layout(font=FONT, height=380, margin=dict(t=20, b=20))
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width='stretch')
 st.info('女性整体指数低于男性，**内分泌与骨骼**更需针对性关注。')
 with st.expander('专业视角'):
     st.markdown(f'女性平均健康指数（{df[df["sex"]=="女"]["health_index"].mean():.1f}）'
@@ -231,7 +281,7 @@ fig = go.Figure(go.Bar(
     text=[f'{v:.1f}' for v in reg_mean.values], textposition='outside'))
 fig.update_layout(font=FONT, height=420, margin=dict(t=20, b=20),
                   xaxis_title='平均 |区域偏离|')
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width='stretch')
 st.info('**肺上叶与心肺循环**偏离最明显，可与有氧、呼吸训练直接对接。')
 with st.expander('专业视角'):
     st.markdown(f'**{reg_mean.index[-1]}、{reg_mean.index[-2]}** 及心肺循环区域偏离最显著，'
@@ -241,20 +291,20 @@ with st.expander('专业视角'):
 st.divider()
 
 # ---------- 6. 系统联动热力图 ----------
-st.header('6. 系统异常联动')
+st.header('6. 系统偏离联动')
 sys_flag = pd.DataFrame({s: absdf[[c for c in cols if c in absdf.columns]].ge(THRESH).mean(axis=1)
                          for s, cols in SYS_MAP.items()})
 corr = sys_flag.corr()
 fig = px.imshow(corr, text_auto='.2f', color_continuous_scale='RdBu_r', zmin=-1, zmax=1, aspect='auto')
 fig.update_layout(font=FONT, height=480, margin=dict(t=20, b=20))
-st.plotly_chart(fig, use_container_width=True)
-st.info('各系统异常**高度共现**，说明是整体机能偏低，要整体调理而非单点。')
+st.plotly_chart(fig, width='stretch')
+st.info('各系统偏离**高度共现**，说明是整体机能偏低，要整体调理而非单点。')
 with st.expander('专业视角'):
-    st.markdown('各系统异常高度共现（相关 0.5–0.89），说明群体问题并非单点，而是「**整体机能偏低**」的系统性表现。'
+    st.markdown('各系统偏离高度共现（相关 0.5–0.89），说明群体问题并非单点，而是「**整体机能偏低**」的系统性表现。'
                 '干预应采用「**整体调理 + 重点突破**」策略，而非头痛医头；同时可据此设计跨系统的综合干预课程，'
                 '提升投入产出比。')
 
 st.divider()
 st.caption('📌 本仪表盘为群体健康洞察工具，结论基于群体统计，不构成个体临床诊断。'
-           '综合健康指数为派生相对指标，异常参考线可依据机构标准调整。')
+           '综合健康指数为派生相对指标，关注阈值可依据机构标准调整。')
 st.caption('⚠️ 公开 demo，上传数据请勿包含敏感个人身份信息。')
